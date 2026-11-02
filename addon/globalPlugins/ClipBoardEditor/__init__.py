@@ -22,793 +22,725 @@ import re
 # IDENTIFICAÇÃO DE FORMATOS
 # ============================================================
 
+
 def detectFormat(text):
+	content = text.strip()
 
-    content = text.strip()
+	if not content:
+		return None
 
-    if not content:
-        return None
+	# JSON: objetos e arrays.
+	if (content.startswith("{") and content.endswith("}")) or (
+		content.startswith("[") and content.endswith("]")
+	):
+		try:
+			json.loads(content)
+			return "json"
+		except json.JSONDecodeError:
+			pass
 
-    # JSON: objetos e arrays.
-    if (
-        (content.startswith("{") and content.endswith("}"))
-        or
-        (content.startswith("[") and content.endswith("]"))
-    ):
-        try:
-            json.loads(content)
-            return "json"
-        except json.JSONDecodeError:
-            pass
+	# XML.
+	if content.startswith("<?xml") or re.match(r"^<[\w:.-]+(?:\s|>)", content):
+		try:
+			from xml.dom import minidom
 
-    # XML.
-    if (
-        content.startswith("<?xml")
-        or re.match(r"^<[\w:.-]+(?:\s|>)", content)
-    ):
-        try:
-            from xml.dom import minidom
+			minidom.parseString(content)
+			return "xml"
+		except Exception:
+			pass
 
-            minidom.parseString(content)
-            return "xml"
-        except Exception:
-            pass
+	# SQL.
+	sql_pattern = (
+		r"^(SELECT|INSERT|UPDATE|DELETE|WITH|CREATE|ALTER|"
+		r"DROP|TRUNCATE|EXEC|EXECUTE|MERGE|DECLARE|SET)\b"
+	)
 
-    # SQL.
-    sql_pattern = (
-        r"^(SELECT|INSERT|UPDATE|DELETE|WITH|CREATE|ALTER|"
-        r"DROP|TRUNCATE|EXEC|EXECUTE|MERGE|DECLARE|SET)\b"
-    )
+	if re.match(sql_pattern, content, re.IGNORECASE):
+		return "sql"
 
-    if re.match(sql_pattern, content, re.IGNORECASE):
-        return "sql"
-
-    return None
+	return None
 
 
 # ============================================================
 # FORMATADOR SQL
 # ============================================================
 
+
 def formatSQL(text):
+	keywords = [
+		"SELECT",
+		"FROM",
+		"WHERE",
+		"INNER JOIN",
+		"LEFT JOIN",
+		"RIGHT JOIN",
+		"FULL JOIN",
+		"JOIN",
+		"ON",
+		"AND",
+		"OR",
+		"GROUP BY",
+		"ORDER BY",
+		"HAVING",
+		"UNION ALL",
+		"UNION",
+		"INSERT INTO",
+		"VALUES",
+		"UPDATE",
+		"SET",
+		"DELETE FROM",
+		"CREATE TABLE",
+		"ALTER TABLE",
+		"DROP TABLE",
+		"WHEN",
+		"THEN",
+		"ELSE",
+		"END",
+		"LIMIT",
+		"OFFSET",
+	]
 
-    keywords = [
-        "SELECT",
-        "FROM",
-        "WHERE",
-        "INNER JOIN",
-        "LEFT JOIN",
-        "RIGHT JOIN",
-        "FULL JOIN",
-        "JOIN",
-        "ON",
-        "AND",
-        "OR",
-        "GROUP BY",
-        "ORDER BY",
-        "HAVING",
-        "UNION ALL",
-        "UNION",
-        "INSERT INTO",
-        "VALUES",
-        "UPDATE",
-        "SET",
-        "DELETE FROM",
-        "CREATE TABLE",
-        "ALTER TABLE",
-        "DROP TABLE",
-        "WHEN",
-        "THEN",
-        "ELSE",
-        "END",
-        "LIMIT",
-        "OFFSET",
-    ]
+	formatted = re.sub(r"\s+", " ", text.strip())
 
-    formatted = re.sub(r"\s+", " ", text.strip())
+	for keyword in sorted(keywords, key=len, reverse=True):
+		pattern = r"\b" + re.escape(keyword) + r"\b"
 
-    for keyword in sorted(keywords, key=len, reverse=True):
+		formatted = re.sub(
+			pattern,
+			"\n" + keyword,
+			formatted,
+			flags=re.IGNORECASE,
+		)
 
-        pattern = r"\b" + re.escape(keyword) + r"\b"
+	lines = formatted.splitlines()
+	result = []
 
-        formatted = re.sub(
-            pattern,
-            "\n" + keyword,
-            formatted,
-            flags=re.IGNORECASE
-        )
+	for line in lines:
+		line = line.strip()
 
-    lines = formatted.splitlines()
-    result = []
+		if not line:
+			continue
 
-    for line in lines:
+		upper_line = line.upper()
 
-        line = line.strip()
+		if upper_line.startswith(("AND ", "OR ", "ON ")):
+			result.append("    " + line)
+		else:
+			result.append(line)
 
-        if not line:
-            continue
-
-        upper_line = line.upper()
-
-        if upper_line.startswith(("AND ", "OR ", "ON ")):
-            result.append("    " + line)
-        else:
-            result.append(line)
-
-    return "\n".join(result).strip()
+	return "\n".join(result).strip()
 
 
 # ============================================================
 # DIÁLOGO DO EDITOR
 # ============================================================
 
+
 class ClipboardEditorDialog(wx.Dialog):
+	def __init__(self, parent, clipboard_text, history):
+		super().__init__(
+			parent,
+			title="Editor da área de transferência",
+			size=(1000, 550),
+			style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
+		)
+
+		self.history = list(history)
+
+		# ----------------------------------------------------
+		# ÁREA PRINCIPAL
+		# ----------------------------------------------------
+
+		mainSizer = wx.BoxSizer(wx.VERTICAL)
+
+		instructions = wx.StaticText(
+			self,
+			label=("Edite o conteúdo. Pressione ESC para salvar."),
+		)
+
+		mainSizer.Add(
+			instructions,
+			0,
+			wx.ALL,
+			10,
+		)
+
+		contentSizer = wx.BoxSizer(wx.HORIZONTAL)
+
+		# ----------------------------------------------------
+		# EDITOR DE TEXTO
+		# ----------------------------------------------------
+
+		editorSizer = wx.BoxSizer(wx.VERTICAL)
+
+		self.textCtrl = wx.TextCtrl(
+			self,
+			value=clipboard_text,
+			style=wx.TE_MULTILINE | wx.TE_RICH2,
+		)
+
+		self.textCtrl.SetName("Texto para edição")
+
+		editorSizer.Add(
+			self.textCtrl,
+			1,
+			wx.EXPAND | wx.ALL,
+			5,
+		)
+
+		contentSizer.Add(
+			editorSizer,
+			3,
+			wx.EXPAND | wx.ALL,
+			5,
+		)
+
+		# ----------------------------------------------------
+		# HISTÓRICO
+		# ----------------------------------------------------
+
+		historySizer = wx.BoxSizer(wx.VERTICAL)
+
+		historyLabel = wx.StaticText(
+			self,
+			label="Últimos 10 textos copiados",
+		)
+
+		historySizer.Add(
+			historyLabel,
+			0,
+			wx.ALL,
+			5,
+		)
+
+		self.historyList = wx.ListBox(
+			self,
+			choices=[],
+			style=wx.LB_SINGLE,
+		)
+
+		self.historyList.SetName(
+			"Histórico dos últimos 10 textos copiados",
+		)
+
+		historySizer.Add(
+			self.historyList,
+			1,
+			wx.EXPAND | wx.ALL,
+			5,
+		)
+
+		historyInstructions = wx.StaticText(
+			self,
+			label="Selecione um texto e pressione ENTER para editar.",
+		)
+
+		historySizer.Add(
+			historyInstructions,
+			0,
+			wx.ALL,
+			5,
+		)
+
+		contentSizer.Add(
+			historySizer,
+			2,
+			wx.EXPAND | wx.ALL,
+			5,
+		)
+
+		mainSizer.Add(
+			contentSizer,
+			1,
+			wx.EXPAND,
+		)
+
+		# ----------------------------------------------------
+		# BOTÕES
+		# ----------------------------------------------------
+
+		buttonSizer = wx.BoxSizer(wx.HORIZONTAL)
+
+		self.formatButton = wx.Button(
+			self,
+			label="Formatar JSON",
+		)
+
+		self.formatButton.Bind(
+			wx.EVT_BUTTON,
+			self.formatContent,
+		)
+
+		buttonSizer.Add(
+			self.formatButton,
+			0,
+			wx.ALL,
+			5,
+		)
+
+		saveButton = wx.Button(
+			self,
+			wx.ID_OK,
+			"Salvar",
+		)
+
+		cancelButton = wx.Button(
+			self,
+			wx.ID_CANCEL,
+			"Cancelar",
+		)
+
+		buttonSizer.Add(
+			saveButton,
+			0,
+			wx.ALL,
+			5,
+		)
+
+		buttonSizer.Add(
+			cancelButton,
+			0,
+			wx.ALL,
+			5,
+		)
+
+		mainSizer.Add(
+			buttonSizer,
+			0,
+			wx.ALIGN_RIGHT | wx.ALL,
+			5,
+		)
+
+		self.SetSizer(mainSizer)
+
+		# ----------------------------------------------------
+		# EVENTOS
+		# ----------------------------------------------------
+
+		self.Bind(
+			wx.EVT_CHAR_HOOK,
+			self.onKeyPress,
+		)
+
+		self.textCtrl.Bind(
+			wx.EVT_CHAR_HOOK,
+			self.onKeyPress,
+		)
+
+		self.historyList.Bind(
+			wx.EVT_CHAR_HOOK,
+			self.onKeyPress,
+		)
+
+		saveButton.Bind(
+			wx.EVT_BUTTON,
+			self.saveAndClose,
+		)
+
+		cancelButton.Bind(
+			wx.EVT_BUTTON,
+			self.cancelAndClose,
+		)
+
+		self.updateFormatButton()
+		self.setHistory(history)
+
+		self.textCtrl.SetFocus()
+		self.textCtrl.SetInsertionPointEnd()
+
+	# --------------------------------------------------------
+	# ATUALIZAÇÃO DO HISTÓRICO
+	# --------------------------------------------------------
+
+	def setHistory(self, history):
+		self.history = list(history)
+
+		choices = []
 
-    def __init__(self, parent, clipboard_text, history):
-
-        super().__init__(
-            parent,
-            title="Editor da área de transferência",
-            size=(1000, 550),
-            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER
-        )
-
-        self.history = list(history)
-
-        # ----------------------------------------------------
-        # ÁREA PRINCIPAL
-        # ----------------------------------------------------
-
-        mainSizer = wx.BoxSizer(wx.VERTICAL)
-
-        instructions = wx.StaticText(
-            self,
-            label=(
-                "Edite o conteúdo. "
-                "Pressione ESC para salvar."
-            )
-        )
-
-        mainSizer.Add(
-            instructions,
-            0,
-            wx.ALL,
-            10
-        )
-
-        contentSizer = wx.BoxSizer(wx.HORIZONTAL)
-
-        # ----------------------------------------------------
-        # EDITOR DE TEXTO
-        # ----------------------------------------------------
-
-        editorSizer = wx.BoxSizer(wx.VERTICAL)
-
-        self.textCtrl = wx.TextCtrl(
-            self,
-            value=clipboard_text,
-            style=wx.TE_MULTILINE | wx.TE_RICH2
-        )
-
-        self.textCtrl.SetName("Texto para edição")
-
-        editorSizer.Add(
-            self.textCtrl,
-            1,
-            wx.EXPAND | wx.ALL,
-            5
-        )
-
-        contentSizer.Add(
-            editorSizer,
-            3,
-            wx.EXPAND | wx.ALL,
-            5
-        )
-
-        # ----------------------------------------------------
-        # HISTÓRICO
-        # ----------------------------------------------------
-
-        historySizer = wx.BoxSizer(wx.VERTICAL)
-
-        historyLabel = wx.StaticText(
-            self,
-            label="Últimos 10 textos copiados"
-        )
-
-        historySizer.Add(
-            historyLabel,
-            0,
-            wx.ALL,
-            5
-        )
-
-        self.historyList = wx.ListBox(
-            self,
-            choices=[],
-            style=wx.LB_SINGLE
-        )
-
-        self.historyList.SetName(
-            "Histórico dos últimos 10 textos copiados"
-        )
-
-        historySizer.Add(
-            self.historyList,
-            1,
-            wx.EXPAND | wx.ALL,
-            5
-        )
-
-        historyInstructions = wx.StaticText(
-            self,
-            label="Selecione um texto e pressione ENTER para editar."
-        )
-
-        historySizer.Add(
-            historyInstructions,
-            0,
-            wx.ALL,
-            5
-        )
-
-        contentSizer.Add(
-            historySizer,
-            2,
-            wx.EXPAND | wx.ALL,
-            5
-        )
-
-        mainSizer.Add(
-            contentSizer,
-            1,
-            wx.EXPAND
-        )
-
-        # ----------------------------------------------------
-        # BOTÕES
-        # ----------------------------------------------------
-
-        buttonSizer = wx.BoxSizer(wx.HORIZONTAL)
-
-        self.formatButton = wx.Button(
-            self,
-            label="Formatar JSON"
-        )
-
-        self.formatButton.Bind(
-            wx.EVT_BUTTON,
-            self.formatContent
-        )
-
-        buttonSizer.Add(
-            self.formatButton,
-            0,
-            wx.ALL,
-            5
-        )
-
-        saveButton = wx.Button(
-            self,
-            wx.ID_OK,
-            "Salvar"
-        )
-
-        cancelButton = wx.Button(
-            self,
-            wx.ID_CANCEL,
-            "Cancelar"
-        )
-
-        buttonSizer.Add(
-            saveButton,
-            0,
-            wx.ALL,
-            5
-        )
+		for index, text in enumerate(self.history):
+			# Apresenta uma prévia do conteúdo.
+			preview = re.sub(r"\s+", " ", text).strip()
 
-        buttonSizer.Add(
-            cancelButton,
-            0,
-            wx.ALL,
-            5
-        )
+			if len(preview) > 100:
+				preview = preview[:100] + "..."
 
-        mainSizer.Add(
-            buttonSizer,
-            0,
-            wx.ALIGN_RIGHT | wx.ALL,
-            5
-        )
+			choices.append(
+				f"{index + 1}. {preview}",
+			)
 
-        self.SetSizer(mainSizer)
+		self.historyList.Set(choices)
 
-        # ----------------------------------------------------
-        # EVENTOS
-        # ----------------------------------------------------
+	# --------------------------------------------------------
+	# CARREGAMENTO DE UM TEXTO DO HISTÓRICO
+	# --------------------------------------------------------
 
-        self.Bind(
-            wx.EVT_CHAR_HOOK,
-            self.onKeyPress
-        )
+	def loadHistoryItem(self):
+		index = self.historyList.GetSelection()
 
-        self.textCtrl.Bind(
-            wx.EVT_CHAR_HOOK,
-            self.onKeyPress
-        )
+		if index == wx.NOT_FOUND:
+			ui.message("Nenhum texto selecionado.")
+			return
 
-        self.historyList.Bind(
-            wx.EVT_CHAR_HOOK,
-            self.onKeyPress
-        )
+		if index >= len(self.history):
+			return
 
-        saveButton.Bind(
-            wx.EVT_BUTTON,
-            self.saveAndClose
-        )
+		selectedText = self.history[index]
 
-        cancelButton.Bind(
-            wx.EVT_BUTTON,
-            self.cancelAndClose
-        )
+		self.textCtrl.SetValue(selectedText)
 
-        self.updateFormatButton()
-        self.setHistory(history)
+		self.updateFormatButton()
 
-        self.textCtrl.SetFocus()
-        self.textCtrl.SetInsertionPointEnd()
+		self.textCtrl.SetFocus()
+		self.textCtrl.SetInsertionPointEnd()
 
-    # --------------------------------------------------------
-    # ATUALIZAÇÃO DO HISTÓRICO
-    # --------------------------------------------------------
+		ui.message("Texto carregado para edição.")
 
-    def setHistory(self, history):
+	# --------------------------------------------------------
+	# ATUALIZAÇÃO DO BOTÃO DE FORMATAÇÃO
+	# --------------------------------------------------------
 
-        self.history = list(history)
+	def updateFormatButton(self):
+		self.detectedFormat = detectFormat(
+			self.textCtrl.GetValue(),
+		)
 
-        choices = []
+		formatNames = {
+			"json": "Formatar JSON",
+			"xml": "Formatar XML",
+			"sql": "Formatar SQL",
+		}
 
-        for index, text in enumerate(self.history):
+		if self.detectedFormat:
+			self.formatButton.SetLabel(
+				formatNames[self.detectedFormat],
+			)
 
-            # Apresenta uma prévia do conteúdo.
-            preview = re.sub(r"\s+", " ", text).strip()
+			self.formatButton.Show()
 
-            if len(preview) > 100:
-                preview = preview[:100] + "..."
+		else:
+			self.formatButton.Hide()
 
-            choices.append(
-                f"{index + 1}. {preview}"
-            )
+		self.Layout()
 
-        self.historyList.Set(choices)
+	# --------------------------------------------------------
+	# FORMATAÇÃO DO CONTEÚDO
+	# --------------------------------------------------------
 
-    # --------------------------------------------------------
-    # CARREGAMENTO DE UM TEXTO DO HISTÓRICO
-    # --------------------------------------------------------
+	def formatContent(self, event=None):
+		text = self.textCtrl.GetValue()
 
-    def loadHistoryItem(self):
+		try:
+			if self.detectedFormat == "json":
+				parsed = json.loads(text)
 
-        index = self.historyList.GetSelection()
+				formatted = json.dumps(
+					parsed,
+					indent=4,
+					ensure_ascii=False,
+				)
 
-        if index == wx.NOT_FOUND:
-            ui.message("Nenhum texto selecionado.")
-            return
+				message = "JSON formatado com sucesso!"
 
-        if index >= len(self.history):
-            return
+			elif self.detectedFormat == "xml":
+				from xml.dom import minidom
 
-        selectedText = self.history[index]
+				parsed = minidom.parseString(text)
 
-        self.textCtrl.SetValue(selectedText)
+				formatted = parsed.toprettyxml(
+					indent="    ",
+					encoding=None,
+				)
 
-        self.updateFormatButton()
+				formatted = "\n".join(line for line in formatted.splitlines() if line.strip())
 
-        self.textCtrl.SetFocus()
-        self.textCtrl.SetInsertionPointEnd()
+				message = "XML formatado com sucesso!"
 
-        ui.message("Texto carregado para edição.")
+			elif self.detectedFormat == "sql":
+				formatted = formatSQL(text)
 
-    # --------------------------------------------------------
-    # ATUALIZAÇÃO DO BOTÃO DE FORMATAÇÃO
-    # --------------------------------------------------------
+				message = "SQL formatado com sucesso!"
 
-    def updateFormatButton(self):
+			else:
+				ui.message("Formato não identificado.")
+				return
 
-        self.detectedFormat = detectFormat(
-            self.textCtrl.GetValue()
-        )
+			self.textCtrl.SetValue(formatted)
 
-        formatNames = {
-            "json": "Formatar JSON",
-            "xml": "Formatar XML",
-            "sql": "Formatar SQL"
-        }
+			self.textCtrl.SetInsertionPoint(0)
+			self.textCtrl.SetFocus()
 
-        if self.detectedFormat:
+			self.updateFormatButton()
 
-            self.formatButton.SetLabel(
-                formatNames[self.detectedFormat]
-            )
+			ui.message(message)
 
-            self.formatButton.Show()
+		except json.JSONDecodeError as error:
+			ui.message(
+				f"JSON inválido. Linha {error.lineno}, coluna {error.colno}.",
+			)
 
-        else:
+			self.textCtrl.SetFocus()
 
-            self.formatButton.Hide()
+		except Exception:
+			logHandler.log.error(
+				"Erro ao formatar conteúdo",
+				exc_info=True,
+			)
 
-        self.Layout()
+			ui.message(
+				"Não foi possível formatar o conteúdo.",
+			)
 
-    # --------------------------------------------------------
-    # FORMATAÇÃO DO CONTEÚDO
-    # --------------------------------------------------------
+			self.textCtrl.SetFocus()
 
-    def formatContent(self, event=None):
+	# --------------------------------------------------------
+	# TECLADO
+	# --------------------------------------------------------
 
-        text = self.textCtrl.GetValue()
+	def onKeyPress(self, event):
+		keyCode = event.GetKeyCode()
 
-        try:
+		# ENTER na lista carrega o texto selecionado.
+		if keyCode in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER) and self.historyList.HasFocus():
+			self.loadHistoryItem()
+			return
 
-            if self.detectedFormat == "json":
+		# ESC salva o conteúdo atual.
+		if keyCode == wx.WXK_ESCAPE:
+			event.StopPropagation()
+			self.saveAndClose()
+			return
 
-                parsed = json.loads(text)
+		event.Skip()
 
-                formatted = json.dumps(
-                    parsed,
-                    indent=4,
-                    ensure_ascii=False
-                )
+	# --------------------------------------------------------
+	# SALVAR
+	# --------------------------------------------------------
 
-                message = "JSON formatado com sucesso!"
+	def saveAndClose(self, event=None):
+		text = self.textCtrl.GetValue()
 
-            elif self.detectedFormat == "xml":
+		if not text:
+			ui.message(
+				"O texto está vazio. A área de transferência não foi alterada.",
+			)
 
-                from xml.dom import minidom
+			return
 
-                parsed = minidom.parseString(text)
+		try:
+			api.copyToClip(text)
 
-                formatted = parsed.toprettyxml(
-                    indent="    ",
-                    encoding=None
-                )
+			self.EndModal(wx.ID_OK)
 
-                formatted = "\n".join(
-                    line
-                    for line in formatted.splitlines()
-                    if line.strip()
-                )
+		except Exception:
+			logHandler.log.error(
+				"Erro ao atualizar a área de transferência",
+				exc_info=True,
+			)
 
-                message = "XML formatado com sucesso!"
+			ui.message(
+				"Não foi possível atualizar a área de transferência.",
+			)
 
-            elif self.detectedFormat == "sql":
+	# --------------------------------------------------------
+	# CANCELAR
+	# --------------------------------------------------------
 
-                formatted = formatSQL(text)
-
-                message = "SQL formatado com sucesso!"
-
-            else:
-
-                ui.message("Formato não identificado.")
-                return
-
-            self.textCtrl.SetValue(formatted)
-
-            self.textCtrl.SetInsertionPoint(0)
-            self.textCtrl.SetFocus()
-
-            self.updateFormatButton()
-
-            ui.message(message)
-
-        except json.JSONDecodeError as error:
-
-            ui.message(
-                f"JSON inválido. Linha {error.lineno}, "
-                f"coluna {error.colno}."
-            )
-
-            self.textCtrl.SetFocus()
-
-        except Exception:
-
-            logHandler.log.error(
-                "Erro ao formatar conteúdo",
-                exc_info=True
-            )
-
-            ui.message(
-                "Não foi possível formatar o conteúdo."
-            )
-
-            self.textCtrl.SetFocus()
-
-    # --------------------------------------------------------
-    # TECLADO
-    # --------------------------------------------------------
-
-    def onKeyPress(self, event):
-
-        keyCode = event.GetKeyCode()
-
-        # ENTER na lista carrega o texto selecionado.
-        if (
-            keyCode in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER)
-            and self.historyList.HasFocus()
-        ):
-
-            self.loadHistoryItem()
-            return
-
-        # ESC salva o conteúdo atual.
-        if keyCode == wx.WXK_ESCAPE:
-
-            event.StopPropagation()
-            self.saveAndClose()
-            return
-
-        event.Skip()
-
-    # --------------------------------------------------------
-    # SALVAR
-    # --------------------------------------------------------
-
-    def saveAndClose(self, event=None):
-
-        text = self.textCtrl.GetValue()
-
-        if not text:
-
-            ui.message(
-                "O texto está vazio. "
-                "A área de transferência não foi alterada."
-            )
-
-            return
-
-        try:
-
-            api.copyToClip(text)
-
-            self.EndModal(wx.ID_OK)
-
-        except Exception:
-
-            logHandler.log.error(
-                "Erro ao atualizar a área de transferência",
-                exc_info=True
-            )
-
-            ui.message(
-                "Não foi possível atualizar a área de transferência."
-            )
-
-    # --------------------------------------------------------
-    # CANCELAR
-    # --------------------------------------------------------
-
-    def cancelAndClose(self, event=None):
-
-        self.EndModal(wx.ID_CANCEL)
+	def cancelAndClose(self, event=None):
+		self.EndModal(wx.ID_CANCEL)
 
 
 # ============================================================
 # PLUGIN GLOBAL
 # ============================================================
 
+
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
+	def __init__(self):
+		super().__init__()
 
-    def __init__(self):
+		self.activeDialog = None
 
-        super().__init__()
+		# Histórico em memória.
+		self.clipboardHistory = []
+
+		# Último conteúdo observado.
+		self.lastClipboardText = None
+
+		self.terminated = False
+
+		# Captura o conteúdo que já estiver na área
+		# de transferência quando o plugin iniciar.
+		try:
+			initialText = api.getClipData() or ""
+		except Exception:
+			initialText = ""
 
-        self.activeDialog = None
+		self.recordClipboard(initialText)
 
-        # Histórico em memória.
-        self.clipboardHistory = []
+		# Inicia o monitoramento.
+		wx.CallAfter(self.scheduleClipboardCheck)
 
-        # Último conteúdo observado.
-        self.lastClipboardText = None
+	# --------------------------------------------------------
+	# REGISTRO DO HISTÓRICO
+	# --------------------------------------------------------
 
-        self.terminated = False
+	def recordClipboard(self, text):
+		if not text:
+			return
 
-        # Captura o conteúdo que já estiver na área
-        # de transferência quando o plugin iniciar.
-        try:
-            initialText = api.getClipData() or ""
-        except Exception:
-            initialText = ""
+		# Evita duplicação consecutiva.
+		if not self.clipboardHistory or self.clipboardHistory[0] != text:
+			self.clipboardHistory.insert(0, text)
 
-        self.recordClipboard(initialText)
+			self.clipboardHistory = self.clipboardHistory[:10]
 
-        # Inicia o monitoramento.
-        wx.CallAfter(self.scheduleClipboardCheck)
+			# Atualiza a lista se o editor estiver aberto.
+			if self.activeDialog is not None:
+				self.activeDialog.setHistory(
+					self.clipboardHistory,
+				)
 
-    # --------------------------------------------------------
-    # REGISTRO DO HISTÓRICO
-    # --------------------------------------------------------
+	# --------------------------------------------------------
+	# MONITORAMENTO DA ÁREA DE TRANSFERÊNCIA
+	# --------------------------------------------------------
 
-    def recordClipboard(self, text):
+	def scheduleClipboardCheck(self):
+		if self.terminated:
+			return
 
-        if not text:
-            return
+		self.clipboardTimer = wx.CallLater(
+			300,
+			self.checkClipboard,
+		)
 
-        # Evita duplicação consecutiva.
-        if (
-            not self.clipboardHistory
-            or self.clipboardHistory[0] != text
-        ):
+	def checkClipboard(self):
+		if self.terminated:
+			return
 
-            self.clipboardHistory.insert(0, text)
+		try:
+			# Proteção ao ler área de transferência em background
+			try:
+				currentText = api.getClipData() or ""
+			except Exception:
+				currentText = ""
 
-            self.clipboardHistory = (
-                self.clipboardHistory[:10]
-            )
+			if currentText != self.lastClipboardText:
+				self.lastClipboardText = currentText
 
-            # Atualiza a lista se o editor estiver aberto.
-            if self.activeDialog is not None:
+				self.recordClipboard(currentText)
 
-                self.activeDialog.setHistory(
-                    self.clipboardHistory
-                )
+		except Exception:
+			logHandler.log.error(
+				"Erro ao monitorar a área de transferência",
+				exc_info=True,
+			)
 
-    # --------------------------------------------------------
-    # MONITORAMENTO DA ÁREA DE TRANSFERÊNCIA
-    # --------------------------------------------------------
+		self.scheduleClipboardCheck()
 
-    def scheduleClipboardCheck(self):
+	# --------------------------------------------------------
+	# ATALHO PRINCIPAL
+	# --------------------------------------------------------
 
-        if self.terminated:
-            return
+	@script(
+		description="Abre o editor da área de transferência",
+		gesture="kb:NVDA+shift+c",
+	)
+	def script_clipboardEditor(self, gesture):
+		wx.CallAfter(self.openEditor)
 
-        self.clipboardTimer = wx.CallLater(
-            300,
-            self.checkClipboard
-        )
+	# --------------------------------------------------------
+	# ABERTURA DO EDITOR
+	# --------------------------------------------------------
 
-    def checkClipboard(self):
+	def openEditor(self):
+		# Verifica se já existe uma janela aberta.
+		if self.activeDialog is not None:
+			oldDialog = self.activeDialog
 
-        if self.terminated:
-            return
+			answer = wx.MessageBox(
+				"Já existe uma edição aberta.\n\nDeseja descartar a edição atual e abrir um novo texto?",
+				"Editor da área de transferência",
+				wx.YES_NO | wx.ICON_QUESTION | wx.NO_DEFAULT,
+				oldDialog,
+			)
 
-        try:
-            # Proteção ao ler área de transferência em background
-            try:
-                currentText = api.getClipData() or ""
-            except Exception:
-                currentText = ""
+			# NÃO: mantém a janela atual.
+			if answer != wx.YES:
+				oldDialog.Raise()
+				oldDialog.SetFocus()
 
-            if currentText != self.lastClipboardText:
+				return
 
-                self.lastClipboardText = currentText
+			# SIM: descarta a edição anterior.
+			self.activeDialog = None
 
-                self.recordClipboard(currentText)
+			oldDialog.EndModal(wx.ID_CANCEL)
 
-        except Exception:
+			# Abre a nova janela após encerrar a anterior.
+			wx.CallAfter(self.openEditor)
 
-            logHandler.log.error(
-                "Erro ao monitorar a área de transferência",
-                exc_info=True
-            )
+			return
 
-        self.scheduleClipboardCheck()
+		dialog = None
 
-    # --------------------------------------------------------
-    # ATALHO PRINCIPAL
-    # --------------------------------------------------------
+		try:
+			# Proteção para quando a área de transferência estiver vazia ou for um arquivo/imagem
+			try:
+				clipboard_text = api.getClipData() or ""
+			except Exception:
+				clipboard_text = ""
 
-    @script(
-        description="Abre o editor da área de transferência",
-        gesture="kb:NVDA+shift+c"
-    )
-    def script_clipboardEditor(self, gesture):
+			# Atualiza o histórico com o conteúdo atual.
+			self.lastClipboardText = clipboard_text
 
-        wx.CallAfter(self.openEditor)
+			self.recordClipboard(clipboard_text)
 
-    # --------------------------------------------------------
-    # ABERTURA DO EDITOR
-    # --------------------------------------------------------
+			dialog = ClipboardEditorDialog(
+				gui.mainFrame,
+				clipboard_text,
+				self.clipboardHistory,
+			)
 
-    def openEditor(self):
+			self.activeDialog = dialog
 
-        # Verifica se já existe uma janela aberta.
-        if self.activeDialog is not None:
+			result = dialog.ShowModal()
 
-            oldDialog = self.activeDialog
+			if result == wx.ID_OK:
+				ui.message(
+					"Área de transferência atualizada!",
+				)
 
-            answer = wx.MessageBox(
-                "Já existe uma edição aberta.\n\n"
-                "Deseja descartar a edição atual e abrir um novo texto?",
-                "Editor da área de transferência",
-                wx.YES_NO | wx.ICON_QUESTION | wx.NO_DEFAULT,
-                oldDialog
-            )
+			else:
+				ui.message(
+					"Edição cancelada.",
+				)
 
-            # NÃO: mantém a janela atual.
-            if answer != wx.YES:
+		except Exception:
+			logHandler.log.error(
+				"Erro no Clipboard Editor",
+				exc_info=True,
+			)
 
-                oldDialog.Raise()
-                oldDialog.SetFocus()
+			ui.message(
+				"Erro ao executar o editor da área de transferência.",
+			)
 
-                return
+		finally:
+			if dialog is not None:
+				if self.activeDialog is dialog:
+					self.activeDialog = None
 
-            # SIM: descarta a edição anterior.
-            self.activeDialog = None
+				dialog.Destroy()
 
-            oldDialog.EndModal(wx.ID_CANCEL)
+	# --------------------------------------------------------
+	# ENCERRAMENTO DO PLUGIN
+	# --------------------------------------------------------
 
-            # Abre a nova janela após encerrar a anterior.
-            wx.CallAfter(self.openEditor)
+	def terminate(self):
+		self.terminated = True
 
-            return
+		if hasattr(self, "clipboardTimer"):
+			if self.clipboardTimer.IsRunning():
+				self.clipboardTimer.Stop()
 
-        dialog = None
-
-        try:
-            
-            # Proteção para quando a área de transferência estiver vazia ou for um arquivo/imagem
-            try:
-                clipboard_text = api.getClipData() or ""
-            except Exception:
-                clipboard_text = ""
-
-            # Atualiza o histórico com o conteúdo atual.
-            self.lastClipboardText = clipboard_text
-
-            self.recordClipboard(clipboard_text)
-
-            dialog = ClipboardEditorDialog(
-                gui.mainFrame,
-                clipboard_text,
-                self.clipboardHistory
-            )
-
-            self.activeDialog = dialog
-
-            result = dialog.ShowModal()
-
-            if result == wx.ID_OK:
-
-                ui.message(
-                    "Área de transferência atualizada!"
-                )
-
-            else:
-
-                ui.message(
-                    "Edição cancelada."
-                )
-
-        except Exception:
-
-            logHandler.log.error(
-                "Erro no Clipboard Editor",
-                exc_info=True
-            )
-
-            ui.message(
-                "Erro ao executar o editor da área de transferência."
-            )
-
-        finally:
-
-            if dialog is not None:
-
-                if self.activeDialog is dialog:
-                    self.activeDialog = None
-
-                dialog.Destroy()
-
-    # --------------------------------------------------------
-    # ENCERRAMENTO DO PLUGIN
-    # --------------------------------------------------------
-
-    def terminate(self):
-
-        self.terminated = True
-
-        if hasattr(self, "clipboardTimer"):
-
-            if self.clipboardTimer.IsRunning():
-                self.clipboardTimer.Stop()
-
-        super().terminate()
+		super().terminate()
