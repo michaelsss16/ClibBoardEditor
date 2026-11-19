@@ -30,6 +30,7 @@ RE_XML_START = re.compile(r"^<[\w:.-]+(?:\s|>)", re.DOTALL)
 # IDENTIFICAÇÃO DE FORMATOS
 # ============================================================
 
+
 def detectFormat(text):
 	if not text or len(text) > MAX_ANALYSIS_LENGTH:
 		return None
@@ -62,9 +63,11 @@ def detectFormat(text):
 
 	return None
 
+
 # ============================================================
 # FORMATADOR SQL
 # ============================================================
+
 
 def formatSQL(text):
 	if len(text) > MAX_ANALYSIS_LENGTH:
@@ -75,7 +78,7 @@ def formatSQL(text):
 
 	def save_literal(match):
 		literals.append(match.group(0))
-		return f"__SQL_LITERAL_{len(literals)-1}__"
+		return f"__SQL_LITERAL_{len(literals) - 1}__"
 
 	text_protected = RE_SQL_STRINGS.sub(save_literal, text)
 	formatted = RE_WHITESPACE.sub(" ", text_protected.strip())
@@ -144,9 +147,11 @@ def formatSQL(text):
 
 	return final_sql
 
+
 # ============================================================
 # FORMATADOR XML
 # ============================================================
+
 
 def formatXML(text):
 	root = ET.fromstring(text)
@@ -160,9 +165,11 @@ def formatXML(text):
 		formatted = parsed.toprettyxml(indent="    ")
 		return "\n".join(line for line in formatted.splitlines() if line.strip())
 
+
 # ============================================================
 # DIÁLOGO DO EDITOR
 # ============================================================
+
 
 class ClipboardEditorDialog(wx.Dialog):
 	def __init__(self, parent, clipboard_text, history):
@@ -484,19 +491,13 @@ class ClipboardEditorDialog(wx.Dialog):
 			return
 
 		# Ctrl+Shift+S salva e fecha
-		if (
-			modifiers == (wx.MOD_CONTROL | wx.MOD_SHIFT)
-			and keyCode in (ord("S"), ord("s"))
-		):
+		if modifiers == (wx.MOD_CONTROL | wx.MOD_SHIFT) and keyCode in (ord("S"), ord("s")):
 			event.StopPropagation()
 			self.saveAndClose()
 			return
 
 		# Ctrl+Shift+F formata o conteúdo
-		if (
-			modifiers == (wx.MOD_CONTROL | wx.MOD_SHIFT)
-			and keyCode in (ord("F"), ord("f"))
-		):
+		if modifiers == (wx.MOD_CONTROL | wx.MOD_SHIFT) and keyCode in (ord("F"), ord("f")):
 			event.StopPropagation()
 			self.formatContent()
 			return
@@ -536,9 +537,11 @@ class ClipboardEditorDialog(wx.Dialog):
 			self._formatTimer.Stop()
 		self.EndModal(wx.ID_CANCEL)
 
+
 # ============================================================
 # PLUGIN GLOBAL
 # ============================================================
+
 
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def __init__(self):
