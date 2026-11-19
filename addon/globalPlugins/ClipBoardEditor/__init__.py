@@ -1,10 +1,3 @@
-# -*- coding: UTF-8 -*-
-# ClipBoardEditor- global plugin
-# Editor de conteúdo da área de transferência com histórico e formatação.
-# Copyright (C) 2026 Wellington Cruz <weliveiracruz@gmail.com>
-# This file is covered by the GNU General Public License, version 2.
-# See the file COPYING for more details.
-
 import globalPluginHandler
 from scriptHandler import script
 
@@ -16,16 +9,32 @@ import logHandler
 
 import json
 import re
+import xml.etree.ElementTree as ET
 
+# ============================================================
+# CONFIGURAÇÕES E CONSTANTES
+# ============================================================
+
+MAX_ANALYSIS_LENGTH = 300_000  # Limite de ~300 KB para validações de formato
+
+RE_WHITESPACE = re.compile(r"\s+")
+RE_SQL_STRINGS = re.compile(r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"")
+RE_SQL_DETECT = re.compile(
+	r"^(SELECT|INSERT|UPDATE|DELETE|WITH|CREATE|ALTER|"
+	r"DROP|TRUNCATE|EXEC|EXECUTE|MERGE|DECLARE|SET)\b",
+	re.IGNORECASE,
+)
+RE_XML_START = re.compile(r"^<[\w:.-]+(?:\s|>)", re.DOTALL)
 
 # ============================================================
 # IDENTIFICAÇÃO DE FORMATOS
 # ============================================================
 
-
 def detectFormat(text):
-	content = text.strip()
+	if not text or len(text) > MAX_ANALYSIS_LENGTH:
+		return None
 
+	content = text.strip()
 	if not content:
 		return None
 
@@ -40,33 +49,37 @@ def detectFormat(text):
 			pass
 
 	# XML.
-	if content.startswith("<?xml") or re.match(r"^<[\w:.-]+(?:\s|>)", content):
+	if content.startswith("<?xml") or RE_XML_START.match(content):
 		try:
-			from xml.dom import minidom
-
-			minidom.parseString(content)
+			ET.fromstring(content)
 			return "xml"
 		except Exception:
 			pass
 
 	# SQL.
-	sql_pattern = (
-		r"^(SELECT|INSERT|UPDATE|DELETE|WITH|CREATE|ALTER|"
-		r"DROP|TRUNCATE|EXEC|EXECUTE|MERGE|DECLARE|SET)\b"
-	)
-
-	if re.match(sql_pattern, content, re.IGNORECASE):
+	if RE_SQL_DETECT.match(content):
 		return "sql"
 
 	return None
-
 
 # ============================================================
 # FORMATADOR SQL
 # ============================================================
 
-
 def formatSQL(text):
+	if len(text) > MAX_ANALYSIS_LENGTH:
+		return text
+
+	# Isola e protege strings literais para não quebrar conteúdo entre aspas
+	literals = []
+
+	def save_literal(match):
+		literals.append(match.group(0))
+		return f"__SQL_LITERAL_{len(literals)-1}__"
+
+	text_protected = RE_SQL_STRINGS.sub(save_literal, text)
+	formatted = RE_WHITESPACE.sub(" ", text_protected.strip())
+
 	keywords = [
 		"SELECT",
 		"FROM",
@@ -100,11 +113,8 @@ def formatSQL(text):
 		"OFFSET",
 	]
 
-	formatted = re.sub(r"\s+", " ", text.strip())
-
 	for keyword in sorted(keywords, key=len, reverse=True):
 		pattern = r"\b" + re.escape(keyword) + r"\b"
-
 		formatted = re.sub(
 			pattern,
 			"\n" + keyword,
@@ -117,24 +127,42 @@ def formatSQL(text):
 
 	for line in lines:
 		line = line.strip()
-
 		if not line:
 			continue
 
 		upper_line = line.upper()
-
 		if upper_line.startswith(("AND ", "OR ", "ON ")):
 			result.append("    " + line)
 		else:
 			result.append(line)
 
-	return "\n".join(result).strip()
+	final_sql = "\n".join(result).strip()
 
+	# Restaura as strings literais originais
+	for idx, literal in enumerate(literals):
+		final_sql = final_sql.replace(f"__SQL_LITERAL_{idx}__", literal)
+
+	return final_sql
+
+# ============================================================
+# FORMATADOR XML
+# ============================================================
+
+def formatXML(text):
+	root = ET.fromstring(text)
+	if hasattr(ET, "indent"):
+		ET.indent(root, space="    ")
+		return ET.tostring(root, encoding="unicode")
+	else:
+		from xml.dom import minidom
+
+		parsed = minidom.parseString(text)
+		formatted = parsed.toprettyxml(indent="    ")
+		return "\n".join(line for line in formatted.splitlines() if line.strip())
 
 # ============================================================
 # DIÁLOGO DO EDITOR
 # ============================================================
-
 
 class ClipboardEditorDialog(wx.Dialog):
 	def __init__(self, parent, clipboard_text, history):
@@ -146,6 +174,8 @@ class ClipboardEditorDialog(wx.Dialog):
 		)
 
 		self.history = list(history)
+		self.detectedFormat = None
+		self._formatTimer = None
 
 		# ----------------------------------------------------
 		# ÁREA PRINCIPAL
@@ -155,7 +185,7 @@ class ClipboardEditorDialog(wx.Dialog):
 
 		instructions = wx.StaticText(
 			self,
-			label=("Edite o conteúdo. Pressione ESC para salvar."),
+			label="Edite o conteúdo. Pressione Ctrl+Shift+S para salvar, ou ESC para cancelar.",
 		)
 
 		mainSizer.Add(
@@ -168,7 +198,7 @@ class ClipboardEditorDialog(wx.Dialog):
 		contentSizer = wx.BoxSizer(wx.HORIZONTAL)
 
 		# ----------------------------------------------------
-		# EDITOR DE TEXTO
+		# EDITOR DE TEXTO (Sem quebra de linha visual)
 		# ----------------------------------------------------
 
 		editorSizer = wx.BoxSizer(wx.VERTICAL)
@@ -176,7 +206,7 @@ class ClipboardEditorDialog(wx.Dialog):
 		self.textCtrl = wx.TextCtrl(
 			self,
 			value=clipboard_text,
-			style=wx.TE_MULTILINE | wx.TE_RICH2,
+			style=wx.TE_MULTILINE | wx.TE_DONTWRAP | wx.HSCROLL | wx.TE_RICH2,
 		)
 
 		self.textCtrl.SetName("Texto para edição")
@@ -263,7 +293,7 @@ class ClipboardEditorDialog(wx.Dialog):
 
 		self.formatButton = wx.Button(
 			self,
-			label="Formatar JSON",
+			label="Formatar",
 		)
 
 		self.formatButton.Bind(
@@ -281,13 +311,13 @@ class ClipboardEditorDialog(wx.Dialog):
 		saveButton = wx.Button(
 			self,
 			wx.ID_OK,
-			"Salvar",
+			"Salvar (Ctrl+Shift+S)",
 		)
 
 		cancelButton = wx.Button(
 			self,
 			wx.ID_CANCEL,
-			"Cancelar",
+			"Cancelar (Esc)",
 		)
 
 		buttonSizer.Add(
@@ -317,30 +347,12 @@ class ClipboardEditorDialog(wx.Dialog):
 		# EVENTOS
 		# ----------------------------------------------------
 
-		self.Bind(
-			wx.EVT_CHAR_HOOK,
-			self.onKeyPress,
-		)
+		self.Bind(wx.EVT_CHAR_HOOK, self.onKeyPress)
 
-		self.textCtrl.Bind(
-			wx.EVT_CHAR_HOOK,
-			self.onKeyPress,
-		)
+		self.textCtrl.Bind(wx.EVT_TEXT, self.onTextChanged)
 
-		self.historyList.Bind(
-			wx.EVT_CHAR_HOOK,
-			self.onKeyPress,
-		)
-
-		saveButton.Bind(
-			wx.EVT_BUTTON,
-			self.saveAndClose,
-		)
-
-		cancelButton.Bind(
-			wx.EVT_BUTTON,
-			self.cancelAndClose,
-		)
+		saveButton.Bind(wx.EVT_BUTTON, self.saveAndClose)
+		cancelButton.Bind(wx.EVT_BUTTON, self.cancelAndClose)
 
 		self.updateFormatButton()
 		self.setHistory(history)
@@ -354,19 +366,14 @@ class ClipboardEditorDialog(wx.Dialog):
 
 	def setHistory(self, history):
 		self.history = list(history)
-
 		choices = []
 
 		for index, text in enumerate(self.history):
-			# Apresenta uma prévia do conteúdo.
-			preview = re.sub(r"\s+", " ", text).strip()
-
+			preview = RE_WHITESPACE.sub(" ", text).strip()
 			if len(preview) > 100:
 				preview = preview[:100] + "..."
 
-			choices.append(
-				f"{index + 1}. {preview}",
-			)
+			choices.append(f"{index + 1}. {preview}")
 
 		self.historyList.Set(choices)
 
@@ -385,9 +392,7 @@ class ClipboardEditorDialog(wx.Dialog):
 			return
 
 		selectedText = self.history[index]
-
 		self.textCtrl.SetValue(selectedText)
-
 		self.updateFormatButton()
 
 		self.textCtrl.SetFocus()
@@ -396,13 +401,19 @@ class ClipboardEditorDialog(wx.Dialog):
 		ui.message("Texto carregado para edição.")
 
 	# --------------------------------------------------------
-	# ATUALIZAÇÃO DO BOTÃO DE FORMATAÇÃO
+	# DETECÇÃO DINÂMICA DE FORMATO
 	# --------------------------------------------------------
 
+	def onTextChanged(self, event):
+		# Debounce de 250ms para não sobrecarregar a digitação
+		if self._formatTimer and self._formatTimer.IsRunning():
+			self._formatTimer.Stop()
+
+		self._formatTimer = wx.CallLater(250, self.updateFormatButton)
+		event.Skip()
+
 	def updateFormatButton(self):
-		self.detectedFormat = detectFormat(
-			self.textCtrl.GetValue(),
-		)
+		self.detectedFormat = detectFormat(self.textCtrl.GetValue())
 
 		formatNames = {
 			"json": "Formatar JSON",
@@ -411,12 +422,8 @@ class ClipboardEditorDialog(wx.Dialog):
 		}
 
 		if self.detectedFormat:
-			self.formatButton.SetLabel(
-				formatNames[self.detectedFormat],
-			)
-
+			self.formatButton.SetLabel(formatNames[self.detectedFormat])
 			self.formatButton.Show()
-
 		else:
 			self.formatButton.Hide()
 
@@ -432,82 +439,72 @@ class ClipboardEditorDialog(wx.Dialog):
 		try:
 			if self.detectedFormat == "json":
 				parsed = json.loads(text)
-
-				formatted = json.dumps(
-					parsed,
-					indent=4,
-					ensure_ascii=False,
-				)
-
+				formatted = json.dumps(parsed, indent=4, ensure_ascii=False)
 				message = "JSON formatado com sucesso!"
 
 			elif self.detectedFormat == "xml":
-				from xml.dom import minidom
-
-				parsed = minidom.parseString(text)
-
-				formatted = parsed.toprettyxml(
-					indent="    ",
-					encoding=None,
-				)
-
-				formatted = "\n".join(line for line in formatted.splitlines() if line.strip())
-
+				formatted = formatXML(text)
 				message = "XML formatado com sucesso!"
 
 			elif self.detectedFormat == "sql":
 				formatted = formatSQL(text)
-
 				message = "SQL formatado com sucesso!"
 
 			else:
-				ui.message("Formato não identificado.")
+				ui.message("Nenhum formato compatível identificado.")
 				return
 
 			self.textCtrl.SetValue(formatted)
-
 			self.textCtrl.SetInsertionPoint(0)
 			self.textCtrl.SetFocus()
-
 			self.updateFormatButton()
 
 			ui.message(message)
 
 		except json.JSONDecodeError as error:
-			ui.message(
-				f"JSON inválido. Linha {error.lineno}, coluna {error.colno}.",
-			)
-
+			ui.message(f"JSON inválido. Linha {error.lineno}, coluna {error.colno}.")
 			self.textCtrl.SetFocus()
 
 		except Exception:
-			logHandler.log.error(
-				"Erro ao formatar conteúdo",
-				exc_info=True,
-			)
-
-			ui.message(
-				"Não foi possível formatar o conteúdo.",
-			)
-
+			logHandler.log.error("Erro ao formatar conteúdo", exc_info=True)
+			ui.message("Não foi possível formatar o conteúdo.")
 			self.textCtrl.SetFocus()
 
 	# --------------------------------------------------------
-	# TECLADO
+	# CONTROLE DE TECLADO
 	# --------------------------------------------------------
 
 	def onKeyPress(self, event):
 		keyCode = event.GetKeyCode()
+		modifiers = event.GetModifiers()
 
-		# ENTER na lista carrega o texto selecionado.
+		# ENTER na lista carrega o texto selecionado
 		if keyCode in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER) and self.historyList.HasFocus():
 			self.loadHistoryItem()
 			return
 
-		# ESC salva o conteúdo atual.
-		if keyCode == wx.WXK_ESCAPE:
+		# Ctrl+Shift+S salva e fecha
+		if (
+			modifiers == (wx.MOD_CONTROL | wx.MOD_SHIFT)
+			and keyCode in (ord("S"), ord("s"))
+		):
 			event.StopPropagation()
 			self.saveAndClose()
+			return
+
+		# Ctrl+Shift+F formata o conteúdo
+		if (
+			modifiers == (wx.MOD_CONTROL | wx.MOD_SHIFT)
+			and keyCode in (ord("F"), ord("f"))
+		):
+			event.StopPropagation()
+			self.formatContent()
+			return
+
+		# ESC cancela e fecha (Padrão de acessibilidade)
+		if keyCode == wx.WXK_ESCAPE:
+			event.StopPropagation()
+			self.cancelAndClose()
 			return
 
 		event.Skip()
@@ -519,16 +516,8 @@ class ClipboardEditorDialog(wx.Dialog):
 	def saveAndClose(self, event=None):
 		text = self.textCtrl.GetValue()
 
-		if not text:
-			ui.message(
-				"O texto está vazio. A área de transferência não foi alterada.",
-			)
-
-			return
-
 		try:
 			api.copyToClip(text)
-
 			self.EndModal(wx.ID_OK)
 
 		except Exception:
@@ -536,40 +525,30 @@ class ClipboardEditorDialog(wx.Dialog):
 				"Erro ao atualizar a área de transferência",
 				exc_info=True,
 			)
-
-			ui.message(
-				"Não foi possível atualizar a área de transferência.",
-			)
+			ui.message("Não foi possível atualizar a área de transferência.")
 
 	# --------------------------------------------------------
 	# CANCELAR
 	# --------------------------------------------------------
 
 	def cancelAndClose(self, event=None):
+		if self._formatTimer and self._formatTimer.IsRunning():
+			self._formatTimer.Stop()
 		self.EndModal(wx.ID_CANCEL)
-
 
 # ============================================================
 # PLUGIN GLOBAL
 # ============================================================
-
 
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def __init__(self):
 		super().__init__()
 
 		self.activeDialog = None
-
-		# Histórico em memória.
 		self.clipboardHistory = []
-
-		# Último conteúdo observado.
 		self.lastClipboardText = None
-
 		self.terminated = False
 
-		# Captura o conteúdo que já estiver na área
-		# de transferência quando o plugin iniciar.
 		try:
 			initialText = api.getClipData() or ""
 		except Exception:
@@ -577,7 +556,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 		self.recordClipboard(initialText)
 
-		# Inicia o monitoramento.
+		# Inicia o monitoramento periódico
 		wx.CallAfter(self.scheduleClipboardCheck)
 
 	# --------------------------------------------------------
@@ -588,17 +567,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if not text:
 			return
 
-		# Evita duplicação consecutiva.
 		if not self.clipboardHistory or self.clipboardHistory[0] != text:
 			self.clipboardHistory.insert(0, text)
-
 			self.clipboardHistory = self.clipboardHistory[:10]
 
-			# Atualiza a lista se o editor estiver aberto.
 			if self.activeDialog is not None:
-				self.activeDialog.setHistory(
-					self.clipboardHistory,
-				)
+				self.activeDialog.setHistory(self.clipboardHistory)
 
 	# --------------------------------------------------------
 	# MONITORAMENTO DA ÁREA DE TRANSFERÊNCIA
@@ -608,8 +582,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if self.terminated:
 			return
 
+		# Verificação com intervalo de 1000 ms para evitar bloqueios de sistema
 		self.clipboardTimer = wx.CallLater(
-			300,
+			1000,
 			self.checkClipboard,
 		)
 
@@ -618,7 +593,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			return
 
 		try:
-			# Proteção ao ler área de transferência em background
 			try:
 				currentText = api.getClipData() or ""
 			except Exception:
@@ -626,7 +600,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 			if currentText != self.lastClipboardText:
 				self.lastClipboardText = currentText
-
 				self.recordClipboard(currentText)
 
 		except Exception:
@@ -653,7 +626,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	# --------------------------------------------------------
 
 	def openEditor(self):
-		# Verifica se já existe uma janela aberta.
 		if self.activeDialog is not None:
 			oldDialog = self.activeDialog
 
@@ -664,35 +636,26 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				oldDialog,
 			)
 
-			# NÃO: mantém a janela atual.
 			if answer != wx.YES:
 				oldDialog.Raise()
 				oldDialog.SetFocus()
-
 				return
 
-			# SIM: descarta a edição anterior.
 			self.activeDialog = None
-
 			oldDialog.EndModal(wx.ID_CANCEL)
 
-			# Abre a nova janela após encerrar a anterior.
 			wx.CallAfter(self.openEditor)
-
 			return
 
 		dialog = None
 
 		try:
-			# Proteção para quando a área de transferência estiver vazia ou for um arquivo/imagem
 			try:
 				clipboard_text = api.getClipData() or ""
 			except Exception:
 				clipboard_text = ""
 
-			# Atualiza o histórico com o conteúdo atual.
 			self.lastClipboardText = clipboard_text
-
 			self.recordClipboard(clipboard_text)
 
 			dialog = ClipboardEditorDialog(
@@ -702,34 +665,21 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			)
 
 			self.activeDialog = dialog
-
 			result = dialog.ShowModal()
 
 			if result == wx.ID_OK:
-				ui.message(
-					"Área de transferência atualizada!",
-				)
-
+				ui.message("Área de transferência atualizada!")
 			else:
-				ui.message(
-					"Edição cancelada.",
-				)
+				ui.message("Edição cancelada.")
 
 		except Exception:
-			logHandler.log.error(
-				"Erro no Clipboard Editor",
-				exc_info=True,
-			)
-
-			ui.message(
-				"Erro ao executar o editor da área de transferência.",
-			)
+			logHandler.log.error("Erro no Clipboard Editor", exc_info=True)
+			ui.message("Erro ao executar o editor da área de transferência.")
 
 		finally:
 			if dialog is not None:
 				if self.activeDialog is dialog:
 					self.activeDialog = None
-
 				dialog.Destroy()
 
 	# --------------------------------------------------------
@@ -739,8 +689,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def terminate(self):
 		self.terminated = True
 
-		if hasattr(self, "clipboardTimer"):
-			if self.clipboardTimer.IsRunning():
-				self.clipboardTimer.Stop()
+		if hasattr(self, "clipboardTimer") and self.clipboardTimer.IsRunning():
+			self.clipboardTimer.Stop()
 
 		super().terminate()
