@@ -18,8 +18,8 @@ addon_info = AddonInfo(
 	addon_version="1.0.0",
 	addon_changelog=_("Adiciona atalhos de funções, melhoria em formatação xml, json e sql. Corrige bug de quebra de linha."),
 	addon_author="Michael Silva<michaelsss16@gmail.com>",
-	addon_url="https://github.com/michaelsss16/ClibBoardEditor",
-	addon_sourceURL="https://github.com/michaelsss16/ClibBoardEditor",
+	addon_url="https://github.com/michaelsss16/ClipBoardEditor",
+	addon_sourceURL="https://github.com/michaelsss16/ClipBoardEditor",
 	# Documentation file name
 	addon_docFileName="readme.html",
 	addon_minimumNVDAVersion="2026.3",
